@@ -73,7 +73,7 @@ export const sendMessageToLLM = async (
       } as LLMResponse;
     }
     
-    // 转换响应格式以兼容现有代码
+    // 转换响应格式
     const formattedResponse: LLMResponse = {
       id: response.id || uuidv4(),
       choices: response.choices.map(choice => ({
