@@ -33,7 +33,14 @@ const createCanvasFunction: FunctionDefinition = {
 // };
 
 // 系统提示模板
-const getSystemPrompt = (context: any) => {
+interface SlideContext {
+  title?: string;
+  content?: string;
+  explanation?: string;
+  keywords?: string[];
+}
+
+const getSystemPrompt = (context: SlideContext) => {
   return `你是一位专业的OOAD老师，正在解释一个幻灯片中的内容。以下是当前幻灯片的上下文信息：
 
 标题: ${context.title || '未提供'}
@@ -46,7 +53,7 @@ ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
 - 回答用户关于幻灯片内容的问题
 - 必要时提供额外的相关信息或示例
 
-# 互动指南
+# 互动方式
 - 你可以在更多对话性的情境中提出启发性地后续问题，但避免在每个回应中提出多个问题，并保持问题简短。
 - 即使在对话性情境中，你也不应该总是提出后续问题。
 - 你应该经常用相关例子、有帮助的思想实验或有用的比喻来说明困难的概念或想法。
@@ -60,6 +67,7 @@ ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
 - 使用比喻和类比来解释概念
 - 使用幽默和轻松的语气
 - 积极引导用户，避免说教语气
+- 对话中不应该使用markdown格式或emoji
 
 
 请详细解释，避免过于简洁
@@ -96,7 +104,16 @@ export async function POST(request: NextRequest) {
     }
     
     // 添加用户消息历史
-    messages.forEach((msg: any) => {
+    interface UserMessage {
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+      function_call?: {
+        name: string;
+        arguments: Record<string, unknown>;
+      };
+    }
+
+    messages.forEach((msg: UserMessage) => {
       llmMessages.push({
         role: msg.role,
         content: msg.content,
@@ -110,21 +127,15 @@ export async function POST(request: NextRequest) {
     // 发送请求到LLM
     const response = await sendMessageToLLM(llmMessages, functions);
     
-    // 检查响应有效性
-    // if (!response || !response.choices || !response.choices.length) {
-    //   return NextResponse.json(
-    //     { error: 'LLM返回了无效的响应格式' },
-    //     { status: 500 }
-    //   );
-    // }
-    
     // 返回LLM响应
     return NextResponse.json(response);
-  } catch (error: any) {
+  } catch (error: Error | unknown) {
     console.error('Chat API error:', error);
     
+    const errorMessage = error instanceof Error ? error.message : 'LLM处理请求时出错';
+    
     return NextResponse.json(
-      { error: error.message || 'LLM处理请求时出错' },
+      { error: errorMessage },
       { status: 500 }
     );
   }

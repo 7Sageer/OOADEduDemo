@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// 示例数据，实际项目中应该从数据库或文件系统加载
-const SAMPLE_CONTEXTS: Record<string, Record<number, any>> = {
+// 实际项目中应该从数据库或文件系统加载
+interface SlideContext {
+  title: string;
+  content: string;
+  explanation: string;
+  keywords: string[];
+}
+
+const SAMPLE_CONTEXTS: Record<string, Record<number, SlideContext>> = {
   '/sample.pdf': {
     "1": {
       "title": "设计模式 II",

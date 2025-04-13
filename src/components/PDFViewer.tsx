@@ -22,7 +22,6 @@ export default function PDFViewer({
   setTotalPages
 }: PDFViewerProps) {
   const [scale, setScale] = useState<number>(1.0);
-  const [loading, setLoading] = useState<boolean>(true);
   const [pageWidth, setPageWidth] = useState<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const [fitMode, setFitMode] = useState<'width' | 'none'>('width');
@@ -32,22 +31,21 @@ export default function PDFViewer({
 
   const handleDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setTotalPages(numPages);
-    setLoading(false);
   };
 
   // 防抖函数
-  const debounce = (func: Function, wait: number) => {
+  const debounce = (callback: () => void, wait: number) => {
     if (resizeTimeoutRef.current) {
       window.clearTimeout(resizeTimeoutRef.current);
     }
     resizeTimeoutRef.current = window.setTimeout(() => {
-      func();
+      callback();
       resizeTimeoutRef.current = null;
     }, wait);
   };
 
   // 处理页面渲染成功，获取页面实际宽度
-  const handlePageLoadSuccess = (page: any) => {
+  const handlePageLoadSuccess = (page: { width: number }) => {
     if (!pageWidth || Math.abs(pageWidth - page.width) > 1) {
       setPageWidth(page.width);
       if (fitMode === 'width' && !isAdjustingRef.current) {
@@ -83,7 +81,8 @@ export default function PDFViewer({
 
   // 监听容器尺寸变化
   useEffect(() => {
-    if (!containerRef.current) return;
+    const currentContainer = containerRef.current;
+    if (!currentContainer) return;
     
     const resizeObserver = new ResizeObserver(() => {
       if (fitMode === 'width' && !isAdjustingRef.current) {
@@ -93,11 +92,11 @@ export default function PDFViewer({
       }
     });
     
-    resizeObserver.observe(containerRef.current);
+    resizeObserver.observe(currentContainer);
     
     return () => {
-      if (containerRef.current) {
-        resizeObserver.unobserve(containerRef.current);
+      if (currentContainer) {
+        resizeObserver.unobserve(currentContainer);
       }
       if (resizeTimeoutRef.current) {
         window.clearTimeout(resizeTimeoutRef.current);

@@ -7,6 +7,14 @@ import Canvas from '@/components/Canvas';
 import useLLM from '@/hooks/useLLM';
 import { fetchSlideContext } from '@/lib/api';
 
+// 幻灯片上下文
+interface SlideContext {
+  title: string;
+  content: string;
+  explanation: string;
+  keywords: string[];
+}
+
 export default function Home() {
   // PDF状态
   const [pdfUrl, setPdfUrl] = useState<string>('/sample.pdf'); // 默认PDF
@@ -14,7 +22,7 @@ export default function Home() {
   const [totalPages, setTotalPages] = useState<number>(0);
   
   // 幻灯片上下文
-  const [slideContext, setSlideContext] = useState<any>(null);
+  const [slideContext, setSlideContext] = useState<SlideContext | null>(null);
   // 添加标志以跟踪每个页面是否已生成介绍
   const [introGenerated, setIntroGenerated] = useState<{[page: number]: boolean}>({});
   

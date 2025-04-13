@@ -1,6 +1,14 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
+
+// 滑动上下文类型
+interface SlideContext {
+  title: string;
+  content: string;
+  explanation: string;
+  keywords: string[];
+}
 
 // 消息类型
 interface Message {
@@ -9,7 +17,7 @@ interface Message {
   content: string;
   function_call?: {
     name: string;
-    arguments: Record<string, any>;
+    arguments: Record<string, unknown>;
   };
 }
 
@@ -32,7 +40,7 @@ interface UseLLMReturn {
 
 // 使用LLM Hook的参数类型
 interface UseLLMParams {
-  context?: any;
+  context?: SlideContext | null;
   includeHistory?: boolean;
 }
 
@@ -129,8 +137,16 @@ export default function useLLM({
           }
         }
       }
-    } catch (err: any) {
-      setError(err.response?.data?.error || err.message || '与LLM通信时出错');
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error 
+        ? err.message 
+        : '与LLM通信时出错';
+      
+      setError(
+        err instanceof Error && 'response' in err 
+          ? ((err as { response?: { data?: { error?: string } } }).response?.data?.error || errorMessage)
+          : errorMessage
+      );
       console.error('LLM请求错误:', err);
     } finally {
       setIsLoading(false);
