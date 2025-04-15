@@ -13,6 +13,8 @@ interface SlideContext {
   content: string;
   explanation: string;
   keywords: string[];
+  currentPage?: number;
+  totalPages?: number;
 }
 
 export default function Home() {
@@ -26,6 +28,9 @@ export default function Home() {
   // 添加标志以跟踪每个页面是否已生成介绍
   const [introGenerated, setIntroGenerated] = useState<{[page: number]: boolean}>({});
   
+  // 添加一个标志，用于标识是否由LLM发起页面切换
+  const [llmInitiatedPageChange, setLlmInitiatedPageChange] = useState<boolean>(false);
+  
   // Ref for current page
   const currentPageRef = useRef(currentPage);
 
@@ -38,7 +43,43 @@ export default function Home() {
     sendMessage,
     clearMessages,
     clearCanvas
-  } = useLLM({ context: slideContext });
+  } = useLLM({ 
+    context: slideContext,
+    onSlideChange: async (pageNumber) => {
+      // 设置标志，表示这是由LLM发起的页面切换
+      setLlmInitiatedPageChange(true);
+      
+      // 确保页码在有效范围内
+      if (pageNumber >= 1 && pageNumber <= totalPages) {
+        setCurrentPage(pageNumber);
+        
+        // 将该页标记为已生成介绍，避免自动触发介绍
+        setIntroGenerated(prev => ({...prev, [pageNumber]: true}));
+        
+        // 立即获取新页面的上下文内容
+        try {
+          const context = await fetchSlideContext(pdfUrl, pageNumber);
+          console.log('Fetched context for page after switch:', pageNumber, context);
+          
+          // 添加上下文信息
+          const contextWithPageInfo = {
+            ...context,
+            currentPage: pageNumber,
+            totalPages
+          };
+          
+          setSlideContext(contextWithPageInfo);
+          
+          // 返回新页面的内容
+          return contextWithPageInfo;
+        } catch (err) {
+          console.error('加载幻灯片上下文失败:', err);
+        }
+      } else {
+        console.warn(`尝试切换到无效页码: ${pageNumber}，总页数: ${totalPages}`);
+      }
+    }
+  });
 
   // 侧边栏状态
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
@@ -63,7 +104,16 @@ export default function Home() {
       clearMessages();
       clearCanvas();
       setCanvasSidebarOpen(false);
+      setIntroGenerated({});
+      setLlmInitiatedPageChange(false);
     }
+  };
+
+  // 处理用户手动切换页面
+  const handlePageChange = (pageNumber: number) => {
+    // 用户手动切换页面时，重置标志
+    setLlmInitiatedPageChange(false);
+    setCurrentPage(pageNumber);
   };
 
   // Update ref whenever currentPage changes
@@ -77,27 +127,40 @@ export default function Home() {
       try {
         const context = await fetchSlideContext(pdfUrl, currentPage);
         console.log('Fetched context for page:', currentPage, context); // <-- 添加日志
-        setSlideContext(context);
+        
+        // 添加上下文信息
+        const contextWithPageInfo = {
+          ...context,
+          currentPage,
+          totalPages
+        };
+        
+        setSlideContext(contextWithPageInfo);
       } catch (err) {
         console.error('加载幻灯片上下文失败:', err);
       }
     };
     
     loadContext();
-  }, [currentPage, pdfUrl]);
+  }, [currentPage, pdfUrl, totalPages]);
 
   // 当slideContext更新且该页面首次加载时生成介绍
   useEffect(() => {
     const page = currentPageRef.current; // Read current page from ref
-    // Ensure slideContext is valid and intro hasn't been generated for the *ref'd* page
-    if (slideContext && !introGenerated[page]) {
+    
+    // 确保上下文有效、页面未生成介绍，并且不是由LLM发起的页面切换
+    if (slideContext && !introGenerated[page] && !llmInitiatedPageChange) {
       const introPrompt = `向我讲解这页幻灯片`;
       console.log(`Sending intro for page ${page} based on context update. Context title: ${slideContext.title}`);
       sendMessage(introPrompt);
       setIntroGenerated(prev => ({...prev, [page]: true}));
     }
-    // Only run when slideContext (or introGenerated/sendMessage) changes, not directly on currentPage change
-  }, [slideContext, introGenerated, sendMessage]);
+    
+    // 重置标志，为下一次页面变更做准备
+    if (llmInitiatedPageChange) {
+      setLlmInitiatedPageChange(false);
+    }
+  }, [slideContext, introGenerated, sendMessage, llmInitiatedPageChange]);
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
@@ -156,7 +219,7 @@ export default function Home() {
               <PDFViewer 
                 pdfUrl={pdfUrl}
                 currentPage={currentPage}
-                onPageChange={setCurrentPage}
+                onPageChange={handlePageChange}
                 totalPages={totalPages}
                 setTotalPages={setTotalPages}
               />

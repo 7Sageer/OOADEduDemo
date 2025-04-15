@@ -2,8 +2,12 @@ import { useState, useRef, FormEvent, useEffect } from 'react';
 
 interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
+  function_call?: {
+    name: string;
+    arguments: Record<string, unknown>;
+  };
 }
 
 interface ChatProps {
@@ -17,6 +21,7 @@ export default function Chat({ onSendMessage, messages, isLoading }: ChatProps) 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [expandedTools, setExpandedTools] = useState<{[key: string]: boolean}>({});
 
   // 自动滚动到最新消息
   const scrollToBottom = () => {
@@ -61,6 +66,103 @@ export default function Chat({ onSendMessage, messages, isLoading }: ChatProps) 
     }
   };
 
+  // 切换工具消息的展开/折叠状态
+  const toggleToolMessage = (id: string) => {
+    setExpandedTools(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  // 获取消息气泡的样式
+  const getMessageStyle = (role: string) => {
+    switch(role) {
+      case 'user':
+        return 'bg-blue-600 text-white rounded-tr-none';
+      case 'assistant':
+        return 'bg-white border border-gray-200 shadow-sm rounded-tl-none';
+      case 'tool':
+        return 'bg-green-50 border border-green-200 shadow-sm rounded-tl-none';
+      default:
+        return 'bg-white border border-gray-200 shadow-sm rounded-tl-none';
+    }
+  };
+
+  // 获取消息文本的样式
+  const getTextStyle = (role: string) => {
+    switch(role) {
+      case 'user':
+        return 'text-white';
+      case 'assistant':
+        return 'text-gray-800';
+      case 'tool':
+        return 'text-green-800';
+      default:
+        return 'text-gray-800';
+    }
+  };
+
+  // 获取消息发送者名称
+  const getSenderName = (role: string) => {
+    switch(role) {
+      case 'user':
+        return '你';
+      case 'assistant':
+        return 'AI助手';
+      case 'tool':
+        return '系统';
+      default:
+        return '未知';
+    }
+  };
+
+  // 显示消息内容或折叠预览
+  const renderMessageContent = (msg: Message) => {
+    if (msg.role !== 'tool') {
+      return (
+        <div className={`whitespace-pre-wrap text-xs sm:text-sm leading-relaxed font-medium ${getTextStyle(msg.role)}`}>
+          {msg.content}
+        </div>
+      );
+    }
+    
+    const isExpanded = expandedTools[msg.id] || false;
+    const previewContent = msg.content.length > 50 
+      ? `${msg.content.substring(0, 50)}...` 
+      : msg.content;
+    
+    return (
+      <div className="w-full">
+        <div 
+          className={`whitespace-pre-wrap text-xs sm:text-sm leading-relaxed font-medium ${getTextStyle(msg.role)} ${isExpanded ? '' : 'cursor-pointer'}`}
+          onClick={() => !isExpanded && toggleToolMessage(msg.id)}
+        >
+          {isExpanded ? msg.content : previewContent}
+        </div>
+        <button 
+          onClick={() => toggleToolMessage(msg.id)}
+          className="mt-1 text-xs text-green-700 hover:text-green-800 underline flex items-center"
+        >
+          {isExpanded ? (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+              </svg>
+              收起
+            </>
+          ) : (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+              展开
+            </>
+          )}
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* 消息列表区域 */}
@@ -90,20 +192,17 @@ export default function Chat({ onSendMessage, messages, isLoading }: ChatProps) 
                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div 
-                    className={`max-w-[90%] sm:max-w-[85%] p-2 sm:p-3 rounded-lg ${
-                      msg.role === 'user' 
-                        ? 'bg-blue-600 text-white rounded-tr-none' 
-                        : 'bg-white border border-gray-200 shadow-sm rounded-tl-none'
-                    }`}
+                    className={`max-w-[90%] sm:max-w-[85%] p-2 sm:p-3 rounded-lg ${getMessageStyle(msg.role)}`}
                   >
-                    <div className="text-xs mb-0.5 sm:mb-1 font-medium">
-                      {msg.role === 'user' ? '你' : 'AI助手'}
+                    <div className="text-xs mb-0.5 sm:mb-1 font-medium flex items-center">
+                      {getSenderName(msg.role)}
+                      {msg.role === 'tool' && (
+                        <span className="ml-1 px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full text-[10px]">
+                          系统操作
+                        </span>
+                      )}
                     </div>
-                    <div className={`whitespace-pre-wrap text-xs sm:text-sm leading-relaxed font-medium ${
-                      msg.role === 'user' ? 'text-white' : 'text-gray-800'
-                    }`}>
-                      {msg.content}
-                    </div>
+                    {renderMessageContent(msg)}
                   </div>
                 </div>
               ))}

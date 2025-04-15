@@ -17,6 +17,22 @@ const createCanvasFunction: FunctionDefinition = {
   }
 };
 
+// LLM函数定义 - 切换幻灯片
+const switchSlideFunction: FunctionDefinition = {
+  name: 'switch_slide',
+  description: '切换到指定的幻灯片页面',
+  parameters: {
+    type: 'object',
+    properties: {
+      pageNumber: {
+        type: 'integer',
+        description: '要切换到的幻灯片页码'
+      }
+    },
+    required: ['pageNumber', 'reason']
+  }
+};
+
 // const thinkFunction: FunctionDefinition ={
 //   name: 'think',
 //   description: '记录思考过程，不会获取新信息或修改数据库，仅将思考内容添加到日志中。在需要复杂推理或缓存记忆时使用。',
@@ -38,6 +54,8 @@ interface SlideContext {
   content?: string;
   explanation?: string;
   keywords?: string[];
+  currentPage?: number;
+  totalPages?: number;
 }
 
 const getSystemPrompt = (context: SlideContext) => {
@@ -47,11 +65,13 @@ const getSystemPrompt = (context: SlideContext) => {
 内容: ${context.content || '未提供'}
 ${context.explanation ? `详细解释: ${context.explanation}` : ''}
 ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
+当前页码: ${context.currentPage || '未提供'} / 总页数: ${context.totalPages || '未提供'}
 
 # 任务
 - 向学生幻灯片中的概念，使其易于理解
 - 回答用户关于幻灯片内容的问题
 - 必要时提供额外的相关信息或示例
+- 当用户请求查看特定内容或需要参考其他幻灯片时，可以使用switch_slide函数切换到相关页面
 
 # 互动方式
 - 你可以在更多对话性的情境中提出启发性地后续问题，但避免在每个回应中提出多个问题，并保持问题简短。
@@ -61,6 +81,8 @@ ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
 # 工具使用
 - 积极使用工具来帮助学生学习
 - 使用Canvas通过Mermaid让内容可视化，同时添加Markdown文本来说明内容
+- 当用户需要查看其他幻灯片时，使用switch_slide函数切换到相关页面
+- 不要重复调用相同的工具，获得结果或完成所有任务后，输出并告诉用户
 
 # 语言风格
 - 口语化的表达
@@ -71,7 +93,7 @@ ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
 
 
 请详细解释，避免过于简洁
-如果你需要创建可视化内容，请使用create_canvas函数。`;
+`;
 };
 
 // # 思考流程
@@ -122,7 +144,7 @@ export async function POST(request: NextRequest) {
     });
     
     // 定义可用的函数
-    const functions = [createCanvasFunction];
+    const functions = [createCanvasFunction, switchSlideFunction];
     
     // 发送请求到LLM
     const response = await sendMessageToLLM(llmMessages, functions);
