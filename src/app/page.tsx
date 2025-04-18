@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import PDFViewer from '@/components/PDFViewer';
 import Chat from '@/components/Chat';
 import Canvas from '@/components/Canvas';
-import useLLM from '@/hooks/useLLM';
 import { fetchSlideContext } from '@/lib/api';
+import { useChat } from '@ai-sdk/react';
+import type { Message as VercelChatMessage } from 'ai/react';
 
 // 幻灯片上下文
 interface SlideContext {
@@ -15,6 +16,12 @@ interface SlideContext {
   keywords: string[];
   currentPage?: number;
   totalPages?: number;
+}
+
+// Define structure for Canvas Content
+interface CanvasContent {
+  visible: boolean;
+  content: string;
 }
 
 export default function Home() {
@@ -34,52 +41,212 @@ export default function Home() {
   // Ref for current page
   const currentPageRef = useRef(currentPage);
 
-  // 使用LLM hook
-  const {
-    messages,
-    isLoading,
-    error,
-    canvasContent,
-    sendMessage,
-    clearMessages,
-    clearCanvas
-  } = useLLM({ 
-    context: slideContext,
-    onSlideChange: async (pageNumber) => {
-      // 设置标志，表示这是由LLM发起的页面切换
-      setLlmInitiatedPageChange(true);
-      
-      // 确保页码在有效范围内
-      if (pageNumber >= 1 && pageNumber <= totalPages) {
-        setCurrentPage(pageNumber);
-        
-        // 将该页标记为已生成介绍，避免自动触发介绍
-        setIntroGenerated(prev => ({...prev, [pageNumber]: true}));
-        
-        // 立即获取新页面的上下文内容
-        try {
-          const context = await fetchSlideContext(pdfUrl, pageNumber);
-          console.log('Fetched context for page after switch:', pageNumber, context);
-          
-          // 添加上下文信息
-          const contextWithPageInfo = {
-            ...context,
-            currentPage: pageNumber,
-            totalPages
-          };
-          
-          setSlideContext(contextWithPageInfo);
-          
-          // 返回新页面的内容
-          return contextWithPageInfo;
-        } catch (err) {
-          console.error('加载幻灯片上下文失败:', err);
-        }
-      } else {
-        console.warn(`尝试切换到无效页码: ${pageNumber}，总页数: ${totalPages}`);
-      }
-    }
+  // State for Canvas
+  const [canvasContent, setCanvasContent] = useState<CanvasContent>({
+    visible: false,
+    content: '',
   });
+
+  // 添加一个引用来跟踪当前是否正在处理工具调用
+  const [isProcessingToolCall, setIsProcessingToolCall] = useState<boolean>(false);
+  // 添加最大工具调用计数，防止无限循环
+  const [toolCallCount, setToolCallCount] = useState<number>(0);
+  const MAX_TOOL_CALLS = 10; // 设置最大工具调用次数
+
+  // Function to clear canvas
+  const clearCanvas = () => {
+    setCanvasContent({ visible: false, content: '' });
+  };
+
+  // Your slide change handler
+  const handleSlideChange = async (pageNumber: number): Promise<SlideContext | undefined> => {
+    // Ensure page number is valid
+    if (pageNumber < 1 || pageNumber > totalPages) {
+      console.warn(`Attempted to switch to invalid page number: ${pageNumber}, Total pages: ${totalPages}`);
+      // Return undefined or throw an error to indicate failure to the tool caller
+      return undefined; 
+    }
+
+    console.log(`Switching to slide ${pageNumber}...`);
+    // Set flag indicating LLM initiated the change
+    setLlmInitiatedPageChange(true); 
+    
+    // Mark page as having intro generated (prevent auto-intro)
+    setIntroGenerated(prev => ({ ...prev, [pageNumber]: true }));
+    
+    // Update current page state
+    setCurrentPage(pageNumber);
+
+    // Immediately fetch context for the new page
+    try {
+      const context = await fetchSlideContext(pdfUrl, pageNumber);
+      console.log('Fetched context for page after switch:', pageNumber, context);
+      
+      const contextWithPageInfo = {
+        ...context,
+        currentPage: pageNumber,
+        totalPages,
+      };
+      
+      // Update slideContext state
+      setSlideContext(contextWithPageInfo);
+      
+      // Return the new context data (useful for the LLM to confirm)
+      return contextWithPageInfo;
+    } catch (err) {
+      console.error('Failed to load slide context after switch:', err);
+      // Return undefined or throw to indicate failure
+      return undefined; 
+    }
+  };
+
+  // --- Vercel AI useChat Hook --- 
+  const { 
+    messages, 
+    input, 
+    handleInputChange, 
+    handleSubmit, 
+    isLoading, 
+    error, 
+    append,
+    setMessages
+  } = useChat({
+    api: '/api/chat', 
+    body: { 
+      context: slideContext, 
+    },
+    async onToolCall({ toolCall }) {
+      console.log("Tool call received:", toolCall);
+      
+      // 防止超过最大调用次数
+      if (toolCallCount >= MAX_TOOL_CALLS) {
+        console.warn(`已达到最大工具调用次数 (${MAX_TOOL_CALLS})，停止迭代调用`);
+        return {
+          toolCallId: toolCall.toolCallId,
+          result: `已达到最大工具调用次数 (${MAX_TOOL_CALLS})，请重新开始对话`,
+        };
+      }
+      
+      // 设置工具调用处理状态为true
+      setIsProcessingToolCall(true);
+      // 增加工具调用计数
+      setToolCallCount(prev => prev + 1);
+      
+      // Define expected argument types for clarity and type safety
+      type CreateCanvasArgs = { content: string };
+      type SwitchSlideArgs = { pageNumber: number };
+
+      // Type guard for arguments remains
+      if (!toolCall.args || typeof toolCall.args !== 'object') {
+        setIsProcessingToolCall(false); // 重置处理状态
+        return {
+          toolCallId: toolCall.toolCallId,
+          result: `Error: Invalid arguments received for tool ${toolCall.toolName}`
+        };
+      }
+
+      let toolResult;
+
+      if (toolCall.toolName === 'create_canvas') {
+        // Cast args to the expected type after the check
+        const args = toolCall.args as CreateCanvasArgs;
+        if (typeof args.content === 'string') {
+          setCanvasContent({
+            visible: true,
+            content: args.content,
+          });
+          toolResult = {
+            toolCallId: toolCall.toolCallId,
+            result: `Canvas created successfully.`,
+          };
+        } else {
+          toolResult = { 
+             toolCallId: toolCall.toolCallId,
+             result: `Error: Missing or invalid 'content' argument for create_canvas.`
+           };
+        }
+       } else if (toolCall.toolName === 'switch_slide') {
+         // Cast args to the expected type
+         const args = toolCall.args as SwitchSlideArgs;
+        if (typeof args.pageNumber === 'number') {
+           try {
+             const contextData = await handleSlideChange(args.pageNumber);
+             if (contextData) {
+               toolResult = {
+                 toolCallId: toolCall.toolCallId,
+                 result: `Successfully switched to slide ${args.pageNumber}. New context: ${contextData.title}`,
+               };
+             } else {
+                toolResult = { 
+                   toolCallId: toolCall.toolCallId,
+                   result: `Error: Failed to switch to slide ${args.pageNumber}. Could not load context or invalid page.`
+                 };
+             }
+           } catch (e) {
+             console.error("Error executing slide switch:", e);
+             toolResult = {
+               toolCallId: toolCall.toolCallId,
+               result: `Error switching slide: ${e instanceof Error ? e.message : 'Unknown error'}`,
+             };
+           }
+        } else {
+           toolResult = { 
+             toolCallId: toolCall.toolCallId,
+             result: `Error: Missing or invalid 'pageNumber' argument for switch_slide.`
+           };
+        }
+       } else {
+         toolResult = {
+           toolCallId: toolCall.toolCallId,
+           result: `Tool ${toolCall.toolName} not implemented.`,
+         };
+       }
+
+       // 工具调用完成后，迭代调用LLM
+       setTimeout(async () => {
+         try {
+           // 使用空字符串作为输入，将工具结果传递给LLM
+           await append({
+             role: 'system',
+             content: `继续处理和响应用户需求，根据工具调用的结果进行回应`
+           });
+         } catch (err) {
+           console.error("迭代LLM调用失败:", err);
+         } finally {
+           setIsProcessingToolCall(false); // 重置处理状态
+         }
+       }, 100);
+
+       return toolResult;
+    },
+    onError: (err) => {
+      console.error("Chat error:", err);
+      setIsProcessingToolCall(false); // 出错时重置处理状态
+      setToolCallCount(0); // 重置工具调用计数
+    },
+    onFinish: (message) => {
+      console.log("Chat finished, last message:", message);
+      setIsProcessingToolCall(false); // 完成时重置处理状态
+      
+      // 如果完成时没有正在进行的工具调用，重置计数
+      if (!isProcessingToolCall) {
+        setToolCallCount(0);
+      }
+    },
+  });
+
+  // 当用户提交新消息时，重置工具调用计数
+  const wrappedHandleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    setToolCallCount(0); // 重置工具调用计数
+    handleSubmit(event);
+  };
+
+  // Function to clear chat messages (using useChat's setMessages)
+  const clearMessages = () => {
+    setMessages([]); 
+    setIntroGenerated({}); // Also reset intro flags
+    setToolCallCount(0); // 重置工具调用计数
+  };
 
   // 侧边栏状态
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
@@ -110,8 +277,8 @@ export default function Home() {
   };
 
   // 处理用户手动切换页面
-  const handlePageChange = (pageNumber: number) => {
-    // 用户手动切换页面时，重置标志
+  const handleUserPageChange = (pageNumber: number) => {
+    // User manually changed page, reset LLM flag
     setLlmInitiatedPageChange(false);
     setCurrentPage(pageNumber);
   };
@@ -124,11 +291,12 @@ export default function Home() {
   // 页面变化时加载新的上下文
   useEffect(() => {
     const loadContext = async () => {
+      if (!pdfUrl || totalPages === 0) return; // Don't load if pdf/totalPages not ready
       try {
+        console.log(`Loading context for page: ${currentPage} (Total: ${totalPages})`);
         const context = await fetchSlideContext(pdfUrl, currentPage);
-        console.log('Fetched context for page:', currentPage, context); // <-- 添加日志
+        console.log('Fetched context for page:', currentPage, context);
         
-        // 添加上下文信息
         const contextWithPageInfo = {
           ...context,
           currentPage,
@@ -138,6 +306,7 @@ export default function Home() {
         setSlideContext(contextWithPageInfo);
       } catch (err) {
         console.error('加载幻灯片上下文失败:', err);
+        setSlideContext(null); // Clear context on error
       }
     };
     
@@ -146,21 +315,26 @@ export default function Home() {
 
   // 当slideContext更新且该页面首次加载时生成介绍
   useEffect(() => {
-    const page = currentPageRef.current; // Read current page from ref
+    const page = currentPageRef.current; 
     
-    // 确保上下文有效、页面未生成介绍，并且不是由LLM发起的页面切换
-    if (slideContext && !introGenerated[page] && !llmInitiatedPageChange) {
-      const introPrompt = `向我讲解这页幻灯片`;
-      console.log(`Sending intro for page ${page} based on context update. Context title: ${slideContext.title}`);
-      sendMessage(introPrompt);
-      setIntroGenerated(prev => ({...prev, [page]: true}));
+    // Ensure context is valid, intro not generated, not LLM initiated change, and not loading
+    if (slideContext && !introGenerated[page] && !llmInitiatedPageChange && !isLoading) {
+      // Check if context actually changed for the current page
+      if(slideContext.currentPage === page) { 
+        const introPrompt = `向我讲解这页幻灯片`;
+        console.log(`Sending intro for page ${page} based on context update. Context title: ${slideContext.title}`);
+        // Use append to send the message programmatically
+        append({ role: 'user', content: introPrompt }); 
+        setIntroGenerated(prev => ({...prev, [page]: true}));
+      }
     }
     
-    // 重置标志，为下一次页面变更做准备
+    // Reset flag after check
     if (llmInitiatedPageChange) {
       setLlmInitiatedPageChange(false);
     }
-  }, [slideContext, introGenerated, sendMessage, llmInitiatedPageChange]);
+    // Depend on slideContext, introGenerated, llmInitiatedPageChange, isLoading, append
+  }, [slideContext, introGenerated, llmInitiatedPageChange, isLoading, append]); 
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
@@ -177,12 +351,12 @@ export default function Home() {
                 className="hidden"
                 id="file-upload"
               />
-              {/* <label 
+              <label 
                 htmlFor="file-upload" 
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium transition-colors"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium transition-colors cursor-pointer"
               >
                 上传PDF
-              </label> */}
+              </label>
             </label>
             {canvasContent.visible && (
               <button
@@ -219,7 +393,7 @@ export default function Home() {
               <PDFViewer 
                 pdfUrl={pdfUrl}
                 currentPage={currentPage}
-                onPageChange={handlePageChange}
+                onPageChange={handleUserPageChange}
                 totalPages={totalPages}
                 setTotalPages={setTotalPages}
               />
@@ -230,7 +404,7 @@ export default function Home() {
           <div className={`md:w-2/5 lg:w-1/3 transition-all duration-300 h-[78.5vh] flex flex-col ${sidebarOpen ? 'block' : 'hidden md:flex'}`}>
             <div className="bg-white rounded-xl shadow-md h-full overflow-hidden flex flex-col">
               <div className="px-4 py-3 bg-blue-600 text-white flex justify-between items-center sticky top-0 z-10">
-                <h2 className="text-lg font-medium">AI教学助手</h2>
+                <h2 className="text-lg font-medium">教学助手</h2>
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={clearMessages}
@@ -252,14 +426,16 @@ export default function Home() {
               
               {error && (
                 <div className="m-3 bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-md text-sm">
-                  错误: {error}
+                  错误: {error.message}
                 </div>
               )}
               
               <div className="flex-grow overflow-hidden">
                 <Chat 
-                  messages={messages}
-                  onSendMessage={sendMessage}
+                  messages={messages as VercelChatMessage[]}
+                  input={input}
+                  handleInputChange={handleInputChange}
+                  handleSubmit={wrappedHandleSubmit}
                   isLoading={isLoading}
                 />
               </div>
@@ -274,7 +450,7 @@ export default function Home() {
               } overflow-y-auto`}
             >
               <div className="p-4 sticky top-0 bg-white border-b border-gray-200 flex justify-between items-center">
-                {/* <h2 className="text-lg font-semibold text-blue-700">可视化内容</h2> */}
+                <h2 className="text-lg font-semibold text-blue-700">可视化内容</h2>
                 <button
                   onClick={() => setCanvasSidebarOpen(false)}
                   className="p-2 rounded-md text-gray-500 hover:bg-gray-100"

@@ -1,31 +1,36 @@
-import { useState, useRef, FormEvent, useEffect } from 'react';
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'tool';
-  content: string;
-  function_call?: {
-    name: string;
-    arguments: Record<string, unknown>;
-  };
-}
+import { useState, useRef, FormEvent, useEffect, ChangeEvent } from 'react';
+import type { Message as VercelChatMessage } from '@ai-sdk/react'; // Import Vercel AI Message type
 
 interface ChatProps {
-  onSendMessage: (message: string) => Promise<void>;
-  messages: Message[];
+  messages: VercelChatMessage[]; // Use VercelChatMessage type
+  input: string;
+  handleInputChange: (
+    e: ChangeEvent<HTMLInputElement> | ChangeEvent<HTMLTextAreaElement>,
+  ) => void;
+  handleSubmit: (
+    e: FormEvent<HTMLFormElement>,
+  ) => void;
   isLoading: boolean;
 }
 
-export default function Chat({ onSendMessage, messages, isLoading }: ChatProps) {
-  const [input, setInput] = useState('');
+export default function Chat({ 
+  messages, 
+  input, 
+  handleInputChange, 
+  handleSubmit: handleFormSubmitProp, // Rename prop to avoid conflict with internal function name
+  isLoading 
+}: ChatProps) {
+  // input state is now managed by useChat, remove local input state
+  // const [input, setInput] = useState(''); 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [expandedTools, setExpandedTools] = useState<{[key: string]: boolean}>({});
+  // expandedTools state might not be needed if we don't expand tool *results*
+  // const [expandedTools, setExpandedTools] = useState<{[key: string]: boolean}>({}); 
 
   // 自动滚动到最新消息
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView();
   };
 
   // 监听消息变化自动滚动
@@ -33,134 +38,125 @@ export default function Chat({ onSendMessage, messages, isLoading }: ChatProps) 
     scrollToBottom();
   }, [messages]);
 
-  // 自动调整文本框高度
+  // 自动调整文本框高度 (Uses input prop now)
   useEffect(() => {
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.style.height = 'auto';
       textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
     }
-  }, [input]);
+  }, [input]); 
 
-  // 提交消息
-  const handleSubmit = async (e: FormEvent) => {
+  // 提交消息 (Uses handleSubmit prop from useChat)
+  const handleSubmitInternal = async (e: FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
-
-    const message = input.trim();
-    setInput('');
     
-    // 重置文本框高度
+    // The actual sending logic is now handled by the handleSubmit function passed in props
+    handleFormSubmitProp(e as FormEvent<HTMLFormElement>); // Call the prop function
+    
+    // Resetting textarea height might still be useful visually
     if (textareaRef.current) {
-      textareaRef.current.style.height = '45px';
+      textareaRef.current.style.height = '45px'; 
     }
-    
-    await onSendMessage(message);
   };
 
   // 处理按键事件 (使用回车发送)
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { // Type the event correctly
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e as unknown as FormEvent);
+      handleSubmitInternal(e as unknown as FormEvent);
     }
   };
 
-  // 切换工具消息的展开/折叠状态
-  const toggleToolMessage = (id: string) => {
-    setExpandedTools(prev => ({
-      ...prev,
-      [id]: !prev[id]
-    }));
-  };
-
-  // 获取消息气泡的样式
-  const getMessageStyle = (role: string) => {
+  // 获取消息气泡的样式 (Remove 'tool' case)
+  const getMessageStyle = (role: VercelChatMessage['role']) => {
     switch(role) {
       case 'user':
         return 'bg-blue-600 text-white rounded-tr-none';
       case 'assistant':
         return 'bg-white border border-gray-200 shadow-sm rounded-tl-none';
-      case 'tool':
-        return 'bg-green-50 border border-green-200 shadow-sm rounded-tl-none';
+      // case 'tool': // Removed this case
+      //   return 'bg-green-50 border border-green-200 shadow-sm rounded-tl-none'; 
+      case 'system': // System messages might not be displayed, but handle it
+        return 'bg-gray-100 border border-gray-200 text-gray-500 text-xs italic p-2 text-center';
+      case 'data': // Data messages might not be displayed
+         return 'bg-purple-50 border border-purple-200 text-purple-700 text-xs italic p-2';
       default:
         return 'bg-white border border-gray-200 shadow-sm rounded-tl-none';
     }
   };
 
-  // 获取消息文本的样式
-  const getTextStyle = (role: string) => {
+  // 获取消息文本的样式 (Remove 'tool' case)
+  const getTextStyle = (role: VercelChatMessage['role']) => {
     switch(role) {
       case 'user':
         return 'text-white';
       case 'assistant':
         return 'text-gray-800';
-      case 'tool':
-        return 'text-green-800';
+      // case 'tool': // Removed this case
+      //   return 'text-green-800';
+      case 'system':
+         return 'text-gray-600';
+      case 'data':
+         return 'text-purple-800';
       default:
         return 'text-gray-800';
     }
   };
 
-  // 获取消息发送者名称
-  const getSenderName = (role: string) => {
+  // 获取消息发送者名称 (Remove 'tool' case)
+  const getSenderName = (role: VercelChatMessage['role']) => {
     switch(role) {
       case 'user':
         return '你';
       case 'assistant':
         return 'AI助手';
-      case 'tool':
-        return '系统';
+      // case 'tool': // Removed this case
+      //   return '工具结果';
+      case 'system':
+        return '系统提示';
+      case 'data':
+         return '数据'; // Or hide data messages entirely
       default:
         return '未知';
     }
   };
 
-  // 显示消息内容或折叠预览
-  const renderMessageContent = (msg: Message) => {
-    if (msg.role !== 'tool') {
+  // 显示消息内容 (Remove specific 'tool' role handling)
+  const renderMessageContent = (msg: VercelChatMessage) => {
+    // Handle user and assistant roles
+    if (msg.role === 'user' || msg.role === 'assistant') {
       return (
-        <div className={`whitespace-pre-wrap text-xs sm:text-sm leading-relaxed font-medium ${getTextStyle(msg.role)}`}>
+        <div className={`whitespace-pre-wrap text-xs sm:text-sm leading-relaxed ${getTextStyle(msg.role)}`}>
           {msg.content}
+          {/* Render desired tool invocations from assistant messages */}
+          {msg.role ==='assistant' && msg.toolInvocations && msg.toolInvocations.map((toolCall) => (
+             <div key={toolCall.toolCallId} className="mt-2 p-2 border border-blue-200 bg-blue-50 rounded text-xs text-blue-700">
+               请求调用工具: {toolCall.toolName} 
+               {/* Optionally show args: <pre>{JSON.stringify(toolCall.args, null, 2)}</pre> */}
+             </div>
+           ))}
         </div>
       );
     }
     
-    const isExpanded = expandedTools[msg.id] || false;
-    const previewContent = msg.content.length > 50 
-      ? `${msg.content.substring(0, 50)}...` 
-      : msg.content;
-    
+    // Handle system/data messages (optional display)
+     if (msg.role === 'system' || msg.role === 'data') {
+       // return null; // Option to hide them
+       return (
+         <div className={`whitespace-pre-wrap text-xs italic ${getTextStyle(msg.role)}`}>
+           {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2)}
+         </div>
+       );
+     }
+
+    // Fallback for any unexpected roles (shouldn't happen in practice)
     return (
-      <div className="w-full">
-        <div 
-          className={`whitespace-pre-wrap text-xs sm:text-sm leading-relaxed font-medium ${getTextStyle(msg.role)} ${isExpanded ? '' : 'cursor-pointer'}`}
-          onClick={() => !isExpanded && toggleToolMessage(msg.id)}
-        >
-          {isExpanded ? msg.content : previewContent}
+        <div className={`whitespace-pre-wrap text-xs sm:text-sm leading-relaxed ${getTextStyle(msg.role)}`}>
+          {`[${msg.role}] ${typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2)}`}
         </div>
-        <button 
-          onClick={() => toggleToolMessage(msg.id)}
-          className="mt-1 text-xs text-green-700 hover:text-green-800 underline flex items-center"
-        >
-          {isExpanded ? (
-            <>
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-              </svg>
-              收起
-            </>
-          ) : (
-            <>
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-              展开
-            </>
-          )}
-        </button>
-      </div>
-    );
+      );
   };
 
   return (
@@ -187,62 +183,50 @@ export default function Chat({ onSendMessage, messages, isLoading }: ChatProps) 
           <>
             <div className="space-y-2 sm:space-y-4">
               {messages.map((msg) => (
-                <div 
-                  key={msg.id} 
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div 
-                    className={`max-w-[90%] sm:max-w-[85%] p-2 sm:p-3 rounded-lg ${getMessageStyle(msg.role)}`}
-                  >
-                    <div className="text-xs mb-0.5 sm:mb-1 font-medium flex items-center">
-                      {getSenderName(msg.role)}
-                      {msg.role === 'tool' && (
-                        <span className="ml-1 px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full text-[10px]">
-                          系统操作
-                        </span>
-                      )}
+                // Decide which roles to render. Hide system/data by default?
+                 (msg.role === 'user' || msg.role === 'assistant') && (
+                    <div 
+                      key={msg.id} 
+                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div 
+                        className={`max-w-[90%] sm:max-w-[85%] p-2 sm:p-3 rounded-lg ${getMessageStyle(msg.role)}`}
+                      >
+                        <div className="text-xs mb-0.5 sm:mb-1 font-medium flex items-center">
+                          {getSenderName(msg.role)}
+                           {/* Add any badges if needed */}
+                        </div>
+                        {renderMessageContent(msg)}
+                      </div>
                     </div>
-                    {renderMessageContent(msg)}
-                  </div>
-                </div>
+                 )
               ))}
             </div>
             <div ref={messagesEndRef} />
-          </>
+          </> 
         )}
       </div>
 
       {/* 输入框区域 */}
       <div className="w-full bg-white rounded-lg p-2 border border-gray-200 shadow-sm">
-        <form onSubmit={handleSubmit} className="flex w-full items-center space-x-2">
+        <form onSubmit={handleSubmitInternal} className="flex w-full items-center space-x-2">
           <div className="flex-grow relative">
             <textarea
               ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
+              value={input} // Use input from useChat prop
+              onChange={handleInputChange} // Use handler from useChat prop
               onKeyDown={handleKeyDown}
               placeholder="输入你的问题..."
               className="w-full p-2 sm:p-3 border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent min-h-[45px] max-h-[80px] sm:max-h-[100px] transition-all text-sm sm:text-base leading-relaxed overflow-hidden"
               disabled={isLoading}
               style={{ lineHeight: "1.5", height: '45px' }}
             />
-            {input.length > 0 && !isLoading && (
-              <button
-                type="button"
-                onClick={() => setInput('')}
-                className="absolute right-2 sm:right-3 top-2 sm:top-3 text-gray-400 hover:text-gray-600"
-                aria-label="清除输入"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
-              </button>
-            )}
+             {/* Removed clear button as input state is external */}
           </div>
           <button
             type="submit"
             disabled={!input.trim() || isLoading}
-            className={`px-3 sm:px-4 rounded-lg font-medium transition-colors flex items-center justify-center h-[45px] min-w-[60px] sm:min-w-[80px] text-sm ${
+            className={`px-3 sm:px-4 rounded-lg font-medium transition-colors flex items-center justify-center h-[45px] min-w-[60px] sm:min-w-[80px] text-sm ${ 
               !input.trim() || isLoading
                 ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
                 : 'bg-blue-600 text-white hover:bg-blue-700'

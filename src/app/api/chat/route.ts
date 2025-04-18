@@ -1,37 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sendMessageToLLM, Message, FunctionDefinition } from '@/lib/api';
+import { createOpenAI } from '@ai-sdk/openai';
+import { streamText, tool } from 'ai';
+import { z } from 'zod';
 
-// LLM函数定义 - 创建Canvas
-const createCanvasFunction: FunctionDefinition = {
-  name: 'create_canvas',
+// Initialize OpenAI provider using the factory function
+const openai = createOpenAI({
+  apiKey: process.env.LLM_API_KEY || '',
+  baseURL: process.env.LLM_BASE_URL || 'https://api.openai.com/v1',
+});
+
+// Define tool for creating canvas using zod schema and the 'tool' helper
+const createCanvasTool = tool({
   description: '创建一个画布，展示Markdown内容或Mermaid图表',
-  parameters: {
-    type: 'object',
-    properties: {
-      content: {
-        type: 'string',
-        description: '要在画布上展示的内容。可以是Markdown格式文本或Mermaid图表。对于Mermaid图表，使用```mermaid ...```格式。'
-      }
-    },
-    required: ['content']
-  }
-};
+  parameters: z.object({
+    content: z.string().describe('要在画布上展示的内容。可以是Markdown格式文本或Mermaid图表。对于Mermaid图表，使用```mermaid ...```格式。')
+  }),
+});
 
-// LLM函数定义 - 切换幻灯片
-const switchSlideFunction: FunctionDefinition = {
-  name: 'switch_slide',
+// Define tool for switching slides
+const switchSlideTool = tool({
   description: '切换到指定的幻灯片页面',
-  parameters: {
-    type: 'object',
-    properties: {
-      pageNumber: {
-        type: 'integer',
-        description: '要切换到的幻灯片页码'
-      }
-    },
-    required: ['pageNumber', 'reason']
-  }
-};
+  parameters: z.object({
+    pageNumber: z.number().int().describe('要切换到的幻灯片页码')
+    // Note: 'reason' was required in the old definition but not used in the hook.
+    // Removing it unless the LLM absolutely needs to provide a reason.
+  }),
+});
 
 // const thinkFunction: FunctionDefinition ={
 //   name: 'think',
@@ -71,7 +65,7 @@ ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
 - 向学生幻灯片中的概念，使其易于理解
 - 回答用户关于幻灯片内容的问题
 - 必要时提供额外的相关信息或示例
-- 当用户请求查看特定内容或需要参考其他幻灯片时，可以使用switch_slide函数切换到相关页面
+- 当用户请求查看特定内容或需要参考其他幻灯片时，可以使用switch_slide工具切换到相关页面
 
 # 互动方式
 - 你可以在更多对话性的情境中提出启发性地后续问题，但避免在每个回应中提出多个问题，并保持问题简短。
@@ -81,7 +75,7 @@ ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
 # 工具使用
 - 积极使用工具来帮助学生学习
 - 使用Canvas通过Mermaid让内容可视化，同时添加Markdown文本来说明内容
-- 当用户需要查看其他幻灯片时，使用switch_slide函数切换到相关页面
+- 当用户需要查看其他幻灯片时，使用switch_slide工具切换到相关页面
 - 不要重复调用相同的工具，获得结果或完成所有任务后，输出并告诉用户
 
 # 语言风格
@@ -105,60 +99,41 @@ ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, context } = await request.json();
-    
-    if (!messages || !Array.isArray(messages)) {
+    const { messages: clientMessages, context } = await request.json();
+
+    if (!clientMessages || !Array.isArray(clientMessages)) {
       return NextResponse.json(
         { error: '无效的消息格式' },
         { status: 400 }
       );
     }
-    
-    // 构建LLM请求
-    const llmMessages: Message[] = [];
-    
-    // 添加系统消息
-    if (context) {
-      llmMessages.push({
-        role: 'system',
-        content: getSystemPrompt(context)
-      });
-    }
-    
-    // 添加用户消息历史
-    interface UserMessage {
-      role: 'system' | 'user' | 'assistant';
-      content: string;
-      function_call?: {
-        name: string;
-        arguments: Record<string, unknown>;
-      };
-    }
 
-    messages.forEach((msg: UserMessage) => {
-      llmMessages.push({
-        role: msg.role,
-        content: msg.content,
-        ...(msg.function_call ? { function_call: msg.function_call } : {})
-      });
+    // Prepare messages for the Vercel AI SDK
+    const messages = clientMessages; // Assuming clientMessages structure matches SDK expectations
+
+    const systemPrompt = context ? getSystemPrompt(context) : undefined;
+
+    const result = await streamText({
+      model: openai(process.env.LLM_MODEL || 'gpt-4o'),
+      system: systemPrompt,
+      messages: messages,
+      tools: {
+        create_canvas: createCanvasTool,
+        switch_slide: switchSlideTool
+      },
+      temperature: 0.7,
     });
-    
-    // 定义可用的函数
-    const functions = [createCanvasFunction, switchSlideFunction];
-    
-    // 发送请求到LLM
-    const response = await sendMessageToLLM(llmMessages, functions);
-    
-    // 返回LLM响应
-    return NextResponse.json(response);
+
+    // Return the streaming response
+    return result.toDataStreamResponse(); // Use toDataStreamResponse as identified before
+
   } catch (error: Error | unknown) {
     console.error('Chat API error:', error);
-    
     const errorMessage = error instanceof Error ? error.message : 'LLM处理请求时出错';
-    
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    );
+    // Ensure a proper Response object for errors too
+    return new Response(JSON.stringify({ error: errorMessage }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 } 
