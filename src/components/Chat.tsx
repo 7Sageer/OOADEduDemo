@@ -1,4 +1,4 @@
-import { useState, useRef, FormEvent, useEffect, ChangeEvent } from 'react';
+import { useRef, FormEvent, useEffect, ChangeEvent } from 'react';
 import type { Message as VercelChatMessage } from '@ai-sdk/react'; // Import Vercel AI Message type
 
 interface ChatProps {
