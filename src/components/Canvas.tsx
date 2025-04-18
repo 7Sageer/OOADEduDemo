@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
+import React from 'react';
 
 interface CanvasProps {
   content: string;
@@ -17,15 +18,39 @@ mermaid.initialize({
   logLevel: 3, // 设置日志级别，有助于调试
 });
 
-export default function Canvas({ content, visible, inView = true }: CanvasProps) {
+// 添加防抖函数
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+function CanvasComponent({ content, visible, inView = true }: CanvasProps) {
   const [html, setHtml] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [mermaidRendered, setMermaidRendered] = useState<boolean>(false);
+  const [renderKey, setRenderKey] = useState<number>(0);
+  
+  // 使用防抖处理content变化，避免频繁更新
+  const debouncedContent = useDebounce(content, 300);
+
+  // 添加一个状态跟踪渲染过程
+  const renderingInProgressRef = useRef<boolean>(false);
 
   // Effect 1: Parse Markdown and set HTML
   useEffect(() => {
-    if (!visible || !content) {
+    if (!visible || !debouncedContent) {
       setHtml(''); // Clear html if not visible or no content
       setLoading(false); // Ensure loading is off
       setMermaidRendered(false); // Reset mermaid rendered state
@@ -39,7 +64,7 @@ export default function Canvas({ content, visible, inView = true }: CanvasProps)
     const processMarkdown = async () => {
       try {
         // Convert Markdown to HTML
-        const parsedHtml = marked.parse(content);
+        const parsedHtml = marked.parse(debouncedContent);
         if (typeof parsedHtml === 'string' && isMounted) {
           setHtml(parsedHtml);
           // 不在这里设置loading为false，让第二个effect处理渲染完成后的状态
@@ -61,7 +86,120 @@ export default function Canvas({ content, visible, inView = true }: CanvasProps)
     return () => {
       isMounted = false; // Cleanup function to set flag on unmount
     };
-  }, [content, visible]); // Rerun when content or visibility changes
+  }, [debouncedContent, visible]); // 使用防抖后的content
+
+  // 优化mermaid渲染函数，使用useCallback缓存
+  const renderMermaidAndStyle = useCallback(async () => {
+    // 如果已经在渲染过程中，则跳过
+    if (renderingInProgressRef.current) {
+      return;
+    }
+    
+    renderingInProgressRef.current = true;
+    
+    try {
+      // Ensure the DOM is updated after setHtml before trying to find mermaid elements
+      await new Promise(resolve => setTimeout(resolve, 50)); // 增加延迟确保DOM已更新
+
+      if (canvasRef.current) {
+          // 检查和清理现有的mermaid图表，避免重复渲染的问题
+          const existingMermaidDivs = canvasRef.current.querySelectorAll('.mermaid');
+          if (existingMermaidDivs.length > 0 && mermaidRendered) {
+            // 如果已经渲染过mermaid且存在mermaid div，需要清除
+            existingMermaidDivs.forEach(div => {
+              if (div.parentNode) {
+                try {
+                  div.parentNode.removeChild(div);
+                } catch (e) {
+                  console.error('Error removing mermaid div:', e);
+                }
+              }
+            });
+            // 重置mermaid渲染状态
+            setMermaidRendered(false);
+          }
+          
+          // 查找mermaid代码块
+          const mermaidElements = canvasRef.current.querySelectorAll('code.language-mermaid');
+
+          if (mermaidElements.length > 0) {
+               // Prepare elements for mermaid.run
+               const elementsToRender: HTMLElement[] = [];
+               mermaidElements.forEach((el, index) => {
+                   const pre = el.parentElement;
+                   if (pre) {
+                       const container = document.createElement('div');
+                       container.classList.add('mermaid');
+                       container.setAttribute('id', `mermaid-graph-${index}-${Date.now()}`);
+                       container.textContent = el.textContent || '';
+                       pre.parentNode?.replaceChild(container, pre);
+                       elementsToRender.push(container);
+                   }
+               });
+
+               if (elementsToRender.length > 0) {
+                  try {
+                    // 确保mermaid已被初始化
+                    if (typeof mermaid.run === 'function') {
+                      await mermaid.run({ nodes: elementsToRender });
+                    } else {
+                      console.error('Mermaid.run is not a function. Mermaid may not be properly initialized.');
+                    }
+                    setMermaidRendered(true);
+                  } catch (mermaidError) {
+                    console.error('Mermaid rendering error:', mermaidError);
+                  }
+               }
+          } else {
+              // 没有mermaid图表时也要更新状态
+              setMermaidRendered(true);
+          }
+          
+          // Add style to tables
+          const tables = canvasRef.current.querySelectorAll('table');
+          tables.forEach(table => {
+            table.classList.add('border-collapse', 'w-full', 'my-4');
+            const cells = table.querySelectorAll('th, td');
+            cells.forEach(cell => {
+              cell.classList.add('border', 'border-gray-300', 'px-4', 'py-2');
+            });
+            const headers = table.querySelectorAll('th');
+            headers.forEach(header => {
+              header.classList.add('bg-gray-100', 'font-semibold');
+            });
+          });
+
+          // Add style to code blocks
+          const codeBlocks = canvasRef.current.querySelectorAll('pre code');
+          codeBlocks.forEach(block => {
+            block.parentElement?.classList.add('bg-gray-800', 'text-white', 'rounded-md', 'p-4', 'my-4', 'overflow-x-auto');
+            // Check if mermaid class is present, if so, remove background added by markedjs perhaps
+            if (block.classList.contains('language-mermaid')) {
+              block.parentElement?.classList.remove('bg-gray-800', 'text-white', 'p-4');
+            }
+          });
+
+          // Add style to images
+          const images = canvasRef.current.querySelectorAll('img');
+          images.forEach(img => {
+            img.classList.add('max-w-full', 'h-auto', 'rounded-md', 'my-4');
+          });
+      }
+    } catch (err) {
+      console.error('Failed to render mermaid or apply styles:', err);
+      if (canvasRef.current) {
+          const errorDiv = document.createElement('div');
+          errorDiv.className = 'text-red-600 p-4 border border-red-300 rounded bg-red-50 my-4';
+          errorDiv.textContent = `Error rendering diagram: ${err instanceof Error ? err.message : String(err)}`;
+          const container = canvasRef.current.querySelector('.markdown-content') || canvasRef.current;
+          container.appendChild(errorDiv);
+      }
+    } finally {
+        // 无论如何都要确保loading状态被重置
+        setLoading(false);
+        renderingInProgressRef.current = false;
+    }
+  }, [mermaidRendered]);
 
   // Effect 2: Render Mermaid and apply styles after HTML update or when inView changes
   useEffect(() => {
@@ -72,134 +210,17 @@ export default function Canvas({ content, visible, inView = true }: CanvasProps)
       return;
     }
 
-    let isMounted = true;
-
-    // Function to apply custom styles
-    const addCustomStyles = () => {
-      if (canvasRef.current) {
-        // Add style to tables
-        const tables = canvasRef.current.querySelectorAll('table');
-        tables.forEach(table => {
-          table.classList.add('border-collapse', 'w-full', 'my-4');
-          const cells = table.querySelectorAll('th, td');
-          cells.forEach(cell => {
-            cell.classList.add('border', 'border-gray-300', 'px-4', 'py-2');
-          });
-          const headers = table.querySelectorAll('th');
-          headers.forEach(header => {
-            header.classList.add('bg-gray-100', 'font-semibold');
-          });
-        });
-
-        // Add style to code blocks
-        const codeBlocks = canvasRef.current.querySelectorAll('pre code');
-        codeBlocks.forEach(block => {
-          block.parentElement?.classList.add('bg-gray-800', 'text-white', 'rounded-md', 'p-4', 'my-4', 'overflow-x-auto');
-          // Check if mermaid class is present, if so, remove background added by markedjs perhaps
-          if (block.classList.contains('language-mermaid')) {
-            block.parentElement?.classList.remove('bg-gray-800', 'text-white', 'p-4');
-          }
-        });
-
-        // Add style to images
-        const images = canvasRef.current.querySelectorAll('img');
-        images.forEach(img => {
-          img.classList.add('max-w-full', 'h-auto', 'rounded-md', 'my-4');
-        });
-      }
-    };
-
-
-    const renderMermaidAndStyle = async () => {
-      try {
-        // Ensure the DOM is updated after setHtml before trying to find mermaid elements
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        if (isMounted && canvasRef.current) {
-            // 检查和清理现有的mermaid图表，避免重复渲染的问题
-            const existingMermaidDivs = canvasRef.current.querySelectorAll('.mermaid');
-            if (existingMermaidDivs.length > 0 && mermaidRendered) {
-              // 如果已经渲染过mermaid且存在mermaid div，需要清除
-              existingMermaidDivs.forEach(div => {
-                if (div.parentNode) {
-                  try {
-                    div.parentNode.removeChild(div);
-                  } catch (e) {
-                    console.error('Error removing mermaid div:', e);
-                  }
-                }
-              });
-              // 重置mermaid渲染状态
-              setMermaidRendered(false);
-            }
-            
-            // 查找mermaid代码块
-            const mermaidElements = canvasRef.current.querySelectorAll('code.language-mermaid');
-
-            if (mermaidElements.length > 0) {
-                 // Prepare elements for mermaid.run
-                 const elementsToRender: HTMLElement[] = [];
-                 mermaidElements.forEach((el, index) => {
-                     const pre = el.parentElement;
-                     if (pre) {
-                         const container = document.createElement('div');
-                         container.classList.add('mermaid');
-                         container.setAttribute('id', `mermaid-graph-${index}-${Date.now()}`);
-                         container.textContent = el.textContent || '';
-                         pre.parentNode?.replaceChild(container, pre);
-                         elementsToRender.push(container);
-                     }
-                 });
-
-                 if (elementsToRender.length > 0) {
-                    try {
-                      // 确保mermaid已被初始化
-                      if (typeof mermaid.run === 'function') {
-                        await mermaid.run({ nodes: elementsToRender });
-                      } else {
-                        console.error('Mermaid.run is not a function. Mermaid may not be properly initialized.');
-                      }
-                      if (isMounted) {
-                        setMermaidRendered(true);
-                      }
-                    } catch (mermaidError) {
-                      console.error('Mermaid rendering error:', mermaidError);
-                    }
-                 }
-            } else {
-                // 没有mermaid图表时也要更新状态
-                if (isMounted) {
-                  setMermaidRendered(true);
-                }
-            }
-            
-            // Apply styles after mermaid rendering
-            addCustomStyles();
-        }
-      } catch (err) {
-        console.error('Failed to render mermaid or apply styles:', err);
-        if (isMounted && canvasRef.current) {
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'text-red-600 p-4 border border-red-300 rounded bg-red-50 my-4';
-            errorDiv.textContent = `Error rendering diagram: ${err instanceof Error ? err.message : String(err)}`;
-            const container = canvasRef.current.querySelector('.markdown-content') || canvasRef.current;
-            container.appendChild(errorDiv);
-        }
-      } finally {
-          // 无论如何都要确保loading状态被重置
-          if (isMounted) {
-            setLoading(false);
-          }
-      }
-    };
-
-    // 调用渲染函数
-    renderMermaidAndStyle();
+    // 强制重新渲染mermaid
+    const timerId = setTimeout(() => {
+      renderMermaidAndStyle();
+      // 在完成渲染后更新渲染键，强制刷新整个组件
+      setRenderKey(prev => prev + 1);
+    }, 200);
 
     return () => {
-        isMounted = false;
-    }
-  }, [html, inView, loading, mermaidRendered]); // 添加mermaidRendered作为依赖项
+      clearTimeout(timerId);
+    };
+  }, [html, inView, loading, renderMermaidAndStyle]); // 移除mermaidRendered依赖，使用useCallback缓存的渲染函数
 
   if (!visible) return null;
 
@@ -298,7 +319,7 @@ export default function Canvas({ content, visible, inView = true }: CanvasProps)
   `;
 
   return (
-    <div className="canvas-container bg-white rounded-lg w-full min-h-[200px] transition-all">
+    <div key={renderKey} className="canvas-container bg-white rounded-lg w-full min-h-[200px] transition-all">
       <style>{customStyles}</style>
       
       {loading && (
@@ -358,4 +379,7 @@ export default function Canvas({ content, visible, inView = true }: CanvasProps)
       )}
     </div>
   );
-} 
+}
+
+// 使用React.memo来避免不必要的重新渲染
+export default React.memo(CanvasComponent); 

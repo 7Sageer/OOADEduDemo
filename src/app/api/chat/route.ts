@@ -83,7 +83,7 @@ ${context.keywords ? `关键词: ${context.keywords.join(', ')}` : ''}
 - 使用比喻和类比来解释概念
 - 使用幽默和轻松的语气
 - 积极引导用户，避免说教语气
-- 对话中不应该使用markdown格式或emoji
+- 你的所有markdown格式内容，都应该使用Canvas工具来展示，在对话中不要使用markdown格式
 
 
 请详细解释，避免过于简洁
